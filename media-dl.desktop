@@ -1,0 +1,11 @@
+[Desktop Entry]
+Name=Media DL
+Comment=Download merged 1080p video, hi-res FLAC, or both
+Exec=/home/alex/Projects/media-dl/media-dl --gui
+Icon=video-x-generic
+Terminal=false
+Type=Application
+Categories=AudioVideo;Video;Audio;
+Keywords=youtube;video;flac;download;yt-dlp;1080p;
+StartupNotify=true
+StartupWMClass=local.mediadl
