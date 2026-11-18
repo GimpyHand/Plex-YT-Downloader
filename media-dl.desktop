@@ -1,7 +1,7 @@
 [Desktop Entry]
 Name=Media DL
 Comment=Download merged 1080p video, hi-res FLAC, or both
-Exec=/home/alex/Projects/media-dl/media-dl --gui
+Exec=media-dl --gui
 Icon=video-x-generic
 Terminal=false
 Type=Application
