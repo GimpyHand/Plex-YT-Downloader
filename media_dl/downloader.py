@@ -3,12 +3,25 @@
 from __future__ import annotations
 
 import re
+import shutil
+import sys
 import threading
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 
-import yt_dlp
+try:
+    import yt_dlp
+except ModuleNotFoundError as exc:
+    # Arch ships yt-dlp as a self-contained zipapp rather than a site package.
+    # Python can import its package directly from that executable archive.
+    if exc.name != "yt_dlp":
+        raise
+    yt_dlp_binary = shutil.which("yt-dlp")
+    if yt_dlp_binary is None:
+        raise
+    sys.path.insert(0, yt_dlp_binary)
+    import yt_dlp
 
 from media_dl.preview import clean_name, cookie_browser, split_artist_title, suffix_for
 from media_dl.tagging import apply_flac_tags, tags_from_info
