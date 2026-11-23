@@ -7,10 +7,9 @@ root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 bindir="$HOME/.local/bin"
 appdir="$HOME/.local/share/applications"
 
-# Runtime packages. python-secretstorage is required because the app asks
-# yt-dlp to reuse the Brave login via --cookies-from-browser.
+# SecretStorage is optional; without it, public videos still download normally.
 missing=()
-for pkg in gtk4 libadwaita python-gobject yt-dlp ffmpeg flac python-secretstorage; do
+for pkg in gtk4 libadwaita python-gobject yt-dlp ffmpeg flac; do
     pacman -Qq "$pkg" >/dev/null 2>&1 || missing+=("$pkg")
 done
 if ((${#missing[@]})); then

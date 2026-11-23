@@ -459,8 +459,14 @@ def cookie_browser() -> tuple[str, str, str, None] | None:
 
     Hyprland is not GNOME, so yt-dlp would skip the keyring and YouTube
     answers with a bot check. Brave on this machine stores that login with
-    the GNOME secret service.
+    the GNOME secret service. Cookie reuse is optional: if SecretStorage is
+    unavailable, let yt-dlp access public URLs without browser cookies.
     """
+    try:
+        import secretstorage  # noqa: F401
+    except ImportError:
+        return None
+
     home = Path.home()
     candidates = (
         ("brave", home / ".config/BraveSoftware/Brave-Origin/Default"),
