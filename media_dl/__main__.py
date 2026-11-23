@@ -17,8 +17,10 @@ def main(argv: list[str] | None = None) -> int:
     if os.name == "nt" and getattr(sys, "frozen", False):
         # The Windows distribution keeps yt-dlp.exe and ffmpeg.exe beside the app.
         app_dir = str(Path(sys.executable).resolve().parent)
-        os.environ["PATH"] = app_dir + os.pathsep + os.environ.get("PATH", "")
-        os.environ["PYGI_DLL_PATH"] = app_dir
+        internal_dir = str(Path(app_dir) / "_internal")
+        runtime_dirs = [app_dir, internal_dir]
+        os.environ["PATH"] = os.pathsep.join(runtime_dirs + [os.environ.get("PATH", "")])
+        os.environ["PYGI_DLL_PATH"] = os.pathsep.join(runtime_dirs)
         os.environ["GI_TYPELIB_PATH"] = str(Path(app_dir) / "lib/girepository-1.0")
         os.environ["GSETTINGS_SCHEMA_DIR"] = str(Path(app_dir) / "share/glib-2.0/schemas")
     argv = list(sys.argv[1:] if argv is None else argv)
