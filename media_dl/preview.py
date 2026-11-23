@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 import shutil
 import subprocess
@@ -455,13 +456,14 @@ def pick_audio(
 
 
 def cookie_browser() -> tuple[str, str, str, None] | None:
-    """Browser profile whose YouTube login yt-dlp should reuse.
+    """Optionally reuse a Brave login when explicitly enabled.
 
-    Hyprland is not GNOME, so yt-dlp would skip the keyring and YouTube
-    answers with a bot check. Brave on this machine stores that login with
-    the GNOME secret service. Cookie reuse is optional: if SecretStorage is
-    unavailable, let yt-dlp access public URLs without browser cookies.
+    Automatic browser-cookie extraction invokes SecretStorage and can fail on
+    otherwise healthy desktop installs. Public URLs should never require that
+    dependency, so opt in only with MEDIA_DL_USE_BROWSER_COOKIES=1.
     """
+    if os.environ.get("MEDIA_DL_USE_BROWSER_COOKIES") != "1":
+        return None
     try:
         import secretstorage  # noqa: F401
     except ImportError:

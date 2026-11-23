@@ -27,9 +27,10 @@ The app runs on the **system** Python (`/usr/bin/python3`) because that is where
 the Arch packages above resolve. You can also run it without installing:
 `./media-dl --gui`.
 
-`python-secretstorage` is optional. When installed, Media DL can reuse the
-Brave login stored in GNOME Keyring; without it, public video URLs still work
-without browser cookies.
+Media DL does not read browser cookies by default, so public video URLs never
+depend on SecretStorage. For sites that require a logged-in Brave session, set
+`MEDIA_DL_USE_BROWSER_COOKIES=1` before starting the app; that optional mode
+uses `python-secretstorage` and GNOME Keyring.
 
 ## Windows
 
