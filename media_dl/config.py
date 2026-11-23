@@ -3,9 +3,13 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 
-CONFIG_PATH = Path.home() / ".config/media-dl/config.json"
+if os.name == "nt":
+    CONFIG_PATH = Path(os.environ.get("APPDATA", Path.home() / "AppData/Roaming")) / "Media DL/config.json"
+else:
+    CONFIG_PATH = Path.home() / ".config/media-dl/config.json"
 
 DEFAULTS: dict[str, object] = {
     "mode": "video",

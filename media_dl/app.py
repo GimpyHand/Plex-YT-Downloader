@@ -1,8 +1,7 @@
-"""GTK4 + libadwaita UI for Media DL (video, FLAC, or both)."""
-
 from __future__ import annotations
 
 import queue
+import os
 import shutil
 import subprocess
 import threading
@@ -13,16 +12,16 @@ import gi
 gi.require_version("Gtk", "4.0")
 gi.require_version("Adw", "1")
 
-from gi.repository import Adw, Gdk, Gio, GLib, Graphene, Gtk, Pango  # noqa: E402
+from gi.repository import Adw, Gdk, Gio, GLib, Graphene, Gtk, Pango
 
-from media_dl import config  # noqa: E402
-from media_dl.downloader import (  # noqa: E402
+from media_dl import config
+from media_dl.downloader import (
     MODES,
     QUALITIES,
     MediaDownloader,
     parse_urls,
 )
-from media_dl.preview import (  # noqa: E402
+from media_dl.preview import (
     TYPE_KEYS,
     TYPE_LABEL,
     TYPE_SUFFIX,
@@ -32,15 +31,15 @@ from media_dl.preview import (  # noqa: E402
     detect_video_type,
     display_base,
     display_filename,
-    strip_term,
     fetch_thumbnail,
     fmt_duration,
     pick_audio,
     pick_video,
     probe_url,
+    strip_term,
     video_summary,
 )
-from media_dl.theming import init_theming  # noqa: E402
+from media_dl.theming import init_theming
 
 APP_ID = "local.mediadl"
 
@@ -396,10 +395,12 @@ class MediaDlWindow(Adw.ApplicationWindow):
         self._thumbs: dict[str, Gdk.Texture | None] = {}
         self._link_types: dict[str, str] = {}
         self._link_titles: dict[str, str] = {}
+        self._strips: list[str] = []
         self._link_rows: dict[str, QueueTicket] = {}
         self._link_entries: dict[str, Gtk.Entry] = {}
         self._link_meta: dict[str, Gtk.Label] = {}
         self._link_dropdowns: dict[str, Gtk.DropDown] = {}
+        self._link_remove_buttons: dict[str, Gtk.Button] = {}
         self._link_rails: dict[str, Gtk.Box] = {}
         self._selected_url = ""
         self._downloader: MediaDownloader | None = None
@@ -641,7 +642,7 @@ class MediaDlWindow(Adw.ApplicationWindow):
         self.strip_entry.set_max_width_chars(32)
         self.strip_entry.set_hexpand(True)
         self.strip_entry.set_tooltip_text(
-            "Removed from every title. * is a wildcard: ft. * drops that and the rest, [*] drops a bracket tag. A quote mark clears all quote styles."
+            "Removed from every title. Spacing and quote marks can differ. (Official Video) drops any parenthetical with those words, including (Official Music Video). * is a wildcard: ft. * drops the rest, (*) drops a parenthetical, [*] drops a bracket tag."
         )
         self.strip_entry.connect("activate", lambda *_: self._on_strip_titles())
         clean.append(self.strip_entry)
@@ -844,6 +845,7 @@ class MediaDlWindow(Adw.ApplicationWindow):
                 self._link_entries.pop(url, None)
                 self._link_meta.pop(url, None)
                 self._link_rails.pop(url, None)
+                self._link_remove_buttons.pop(url, None)
 
         for url in urls:
             if url not in self._link_rows:
@@ -920,6 +922,12 @@ class MediaDlWindow(Adw.ApplicationWindow):
         dropdown.connect("notify::selected", self._on_type_selected, url)
         content.append(dropdown)
 
+        remove_btn = Gtk.Button(label="×", valign=Gtk.Align.CENTER)
+        remove_btn.add_css_class("flat")
+        remove_btn.set_tooltip_text("Remove this item from the queue")
+        remove_btn.connect("clicked", lambda *_args: self._remove_queue_url(url))
+        content.append(remove_btn)
+
         row.append(content)
         click = Gtk.GestureClick()
         click.connect("released", lambda *_a: self._select_url(url))
@@ -930,6 +938,7 @@ class MediaDlWindow(Adw.ApplicationWindow):
         self._link_entries[url] = entry
         self._link_meta[url] = meta
         self._link_dropdowns[url] = dropdown
+        self._link_remove_buttons[url] = remove_btn
         self._link_rails[url] = rail
         self._update_row(url)
 
@@ -971,6 +980,11 @@ class MediaDlWindow(Adw.ApplicationWindow):
             changed += 1
         return changed
 
+    def _apply_strips(self, title: str) -> str:
+        for term in self._strips:
+            title = strip_term(title, term)
+        return title
+
     def _on_strip_titles(self) -> None:
         term = self.strip_entry.get_text()
         if not term.strip():
@@ -979,6 +993,7 @@ class MediaDlWindow(Adw.ApplicationWindow):
         if not self._link_entries:
             self._toast("Nothing queued")
             return
+        self._strips.append(term)
         changed = self._rewrite_titles(lambda title: strip_term(title, term))
         if changed:
             self._toast(f"Stripped from {changed} title{'s' if changed != 1 else ''}")
@@ -1044,12 +1059,14 @@ class MediaDlWindow(Adw.ApplicationWindow):
             return
 
         auto = display_base(probe) or probe.title or url
-        if (
-            entry is not None
-            and not entry.has_focus()
-            and url not in self._link_titles
-        ):
-            entry.set_text(auto)
+        if url not in self._link_titles and self._strips:
+            stripped = self._apply_strips(auto).strip()
+            if stripped and stripped != auto:
+                self._link_titles[url] = stripped
+        if entry is not None and not entry.has_focus():
+            wanted = self._link_titles.get(url) or auto
+            if entry.get_text() != wanted:
+                entry.set_text(wanted)
 
         bits = []
         if probe.is_live:
@@ -1098,6 +1115,15 @@ class MediaDlWindow(Adw.ApplicationWindow):
 
     def _on_probe_done(self, url: str, probe: Probe) -> bool:
         self._probe_inflight.discard(url)
+        if probe.playlist_urls:
+            urls = self._queue_urls()
+            if url in urls:
+                expanded: list[str] = []
+                for queued_url in urls:
+                    expanded.extend(probe.playlist_urls if queued_url == url else [queued_url])
+                self.url_buffer.set_text("\n".join(expanded))
+                self._toast(f"Added {len(probe.playlist_urls)} playlist items to the queue")
+            return False
         self._probes[url] = probe
         while len(self._probes) > 50:
             self._probes.pop(next(iter(self._probes)))
@@ -1127,6 +1153,14 @@ class MediaDlWindow(Adw.ApplicationWindow):
     def _queue_urls(self) -> list[str]:
         start, end = self.url_buffer.get_bounds()
         return parse_urls(self.url_buffer.get_text(start, end, False))
+
+    def _remove_queue_url(self, url: str) -> None:
+        if self._busy:
+            return
+        start, end = self.url_buffer.get_bounds()
+        text = self.url_buffer.get_text(start, end, False)
+        if url in parse_urls(text):
+            self.url_buffer.set_text(text.replace(url, ""))
 
     def _cycle_preview(self, step: int) -> None:
         urls = self._queue_urls()
@@ -1424,6 +1458,8 @@ class MediaDlWindow(Adw.ApplicationWindow):
             dropdown.set_sensitive(not busy)
         for entry in self._link_entries.values():
             entry.set_sensitive(not busy)
+        for button in self._link_remove_buttons.values():
+            button.set_sensitive(not busy)
 
     def _on_stop(self, _btn: Gtk.Button) -> None:
         if self._downloader is not None:
@@ -1548,12 +1584,15 @@ class MediaDlWindow(Adw.ApplicationWindow):
     def _on_open_folder(self, _btn: Gtk.Button) -> None:
         path = self._target_dir()
         try:
-            subprocess.Popen(
-                ["xdg-open", path],
-                start_new_session=True,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-            )
+            if os.name == "nt":
+                os.startfile(path)  # type: ignore[attr-defined]
+            else:
+                subprocess.Popen(
+                    ["xdg-open", path],
+                    start_new_session=True,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                )
         except OSError:
             self._toast("Could not open folder")
 
@@ -1589,4 +1628,3 @@ class MediaDlApp(Adw.Application):
 def main(urls: list[str] | None = None) -> int:
     Adw.init()
     return MediaDlApp("\n".join(urls or [])).run(None)
-

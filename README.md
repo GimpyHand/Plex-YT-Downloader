@@ -27,3 +27,14 @@ command if any are missing):
 The app runs on the **system** Python (`/usr/bin/python3`) because that is where
 the Arch packages above resolve. You can also run it without installing:
 `./media-dl --gui`.
+
+## Windows
+
+To build a portable Windows x64 copy, open the repository's **Actions →
+Windows build** workflow on GitHub and choose **Run workflow**. Download the
+`MediaDL-windows-x64` artifact, extract it, and launch `MediaDL.exe`. The
+package includes GTK, yt-dlp, and FFmpeg; recipients do not need Python or
+MSYS2 installed.
+
+The Windows build uses the same GTK 4 and libadwaita interface. Linux continues
+to use the existing system packages and `./media-dl` launcher.

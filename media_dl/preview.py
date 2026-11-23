@@ -7,6 +7,7 @@ import re
 import shutil
 import subprocess
 import sys
+import unicodedata
 import urllib.request
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -96,6 +97,7 @@ class Probe:
     webpage_url: str = ""
     is_live: bool = False
     playlist_count: int = 0
+    playlist_urls: list[str] = field(default_factory=list)
     description: str = ""
     genre: str = ""
     tags: list[str] = field(default_factory=list)
@@ -186,51 +188,199 @@ def clean_name(name: str) -> str:
 
 
 _QUOTES = set("\"'`´«»“”„‟‘’‚‹›")
+_INVISIBLE = dict.fromkeys(map(ord, "\u200b\u200c\u200d\ufeff\u2060"), None)
+_DASHES = str.maketrans({c: "-" for c in "–—−‐‑‒―"})
+_PUNCT = str.maketrans({
+    "“": '"', "”": '"', "„": '"', "‟": '"', "«": '"', "»": '"',
+    "‘": "'", "’": "'", "‚": "'", "‛": "'", "´": "'", "`": "'", "‹": "'", "›": "'",
+    "【": "[", "】": "]", "〖": "[", "〗": "]",
+})
+_BRACKETS = (("(", ")"), ("[", "]"), ("{", "}"))
+
+
+def _drop_unmatched(name: str, opener: str, closer: str) -> str:
+    stack: list[int] = []
+    drop: set[int] = set()
+    for index, ch in enumerate(name):
+        if ch == opener:
+            stack.append(index)
+        elif ch == closer:
+            if stack:
+                stack.pop()
+            else:
+                drop.add(index)
+    drop.update(stack)
+    if not drop:
+        return name
+    return "".join(ch for index, ch in enumerate(name) if index not in drop)
 
 
 def tidy_title(name: str) -> str:
     """Collapse the gaps a removal leaves: double spaces, empty separators."""
-    cleaned = re.sub(r"\s+", " ", name or "")
-    cleaned = re.sub(r"\(\s*\)|\[\s*\]|\{\s*\}", "", cleaned)
-    cleaned = re.sub(r"(?:\s*[-–—|]\s*){2,}", " - ", cleaned)
-    cleaned = re.sub(r"^\s*[-–—|]\s*", "", cleaned)
-    cleaned = re.sub(r"\s*[-–—|]\s*$", "", cleaned)
-    return re.sub(r"\s+", " ", cleaned).strip()
+    cleaned = name or ""
+    for _ in range(3):
+        cleaned = re.sub(r"\s+", " ", cleaned)
+        cleaned = re.sub(r"\(\s*\)|\[\s*\]|\{\s*\}", "", cleaned)
+        for opener, closer in _BRACKETS:
+            cleaned = _drop_unmatched(cleaned, opener, closer)
+        cleaned = re.sub(r"(?:\s*[-–—|]\s*){2,}", " - ", cleaned)
+        cleaned = re.sub(r"^\s*[-–—|]\s*", "", cleaned)
+        cleaned = re.sub(r"\s*[-–—|]\s*$", "", cleaned)
+        cleaned = re.sub(r"\s+", " ", cleaned).strip()
+    return cleaned
 
 
-def _wildcard_pattern(pattern: str) -> re.Pattern[str]:
-    """Turn a strip pattern into a regex. * is the only wildcard.
+def _canon_map(text: str) -> tuple[str, list[int]]:
+    """Fold lookalike letters and punctuation, and remember original indexes.
 
-    A star at the end eats the rest of the title (`ft. *`).
-    A star before more text stops at that text (` [*]`).
+    YouTube titles mix spaces, dashes, and quote marks that look the same.
+    Matching on this folded text is what makes an exact phrase hit all of them.
     """
+    out: list[str] = []
+    starts: list[int] = []
+    previous_space = False
+    for index, ch in enumerate(text or ""):
+        if ch in "\u200b\u200c\u200d\ufeff\u2060":
+            continue
+        folded = unicodedata.normalize("NFKC", ch).translate(_INVISIBLE)
+        folded = folded.translate(_DASHES).translate(_PUNCT).casefold()
+        if not folded:
+            continue
+        if folded.isspace() or all(piece.isspace() for piece in folded):
+            if previous_space or not out:
+                continue
+            out.append(" ")
+            starts.append(index)
+            previous_space = True
+            continue
+        previous_space = False
+        for piece in folded:
+            out.append(piece)
+            starts.append(index)
+    if out and out[-1] == " ":
+        out.pop()
+        starts.pop()
+    starts.append(len(text or ""))
+    return "".join(out), starts
+
+
+def _words(text: str) -> list[str]:
+    return re.findall(r"[0-9a-z]+(?:'[0-9a-z]+)?", text)
+
+
+def _contains_words(text: str, words: list[str]) -> bool:
+    pos = 0
+    for word in words:
+        match = re.search(rf"\b{re.escape(word)}\b", text[pos:])
+        if match is None:
+            return False
+        pos += match.end()
+    return True
+
+
+def _wrapped(term: str) -> tuple[str, str, str] | None:
+    if len(term) >= 2 and (term[0], term[-1]) in _BRACKETS:
+        return term[0], term[-1], term[1:-1].strip()
+    return None
+
+
+def _literal_spans(text: str, phrase: str) -> list[tuple[int, int]]:
+    if not phrase:
+        return []
+    return [match.span() for match in re.finditer(re.escape(phrase), text)]
+
+
+def _wildcard_spans(text: str, pattern: str) -> list[tuple[int, int]]:
     pieces = pattern.split("*")
     last = len(pieces) - 1
     body: list[str] = []
     for index, piece in enumerate(pieces):
-        body.append(re.escape(piece))
+        if index > 0:
+            piece = piece.lstrip(" ")
+        if index < last:
+            piece = piece.rstrip(" ")
+        if piece:
+            body.append(re.escape(piece))
         if index == last:
             break
-        star_ends_the_pattern = pieces[index + 1] == "" and index + 1 == last
-        body.append(".*" if star_ends_the_pattern else ".*?")
-    return re.compile("".join(body), re.IGNORECASE | re.DOTALL)
+        star_ends = pieces[index + 1].strip(" ") == "" and index + 1 == last
+        body.append(".*" if star_ends else ".*?")
+    if not body:
+        return []
+    return [
+        match.span()
+        for match in re.finditer("".join(body), text, flags=re.DOTALL)
+        if match.end() > match.start()
+    ]
+
+
+def _match_spans(text: str, term: str) -> list[tuple[int, int]]:
+    if "*" in term:
+        return _wildcard_spans(text, term)
+    wrapped = _wrapped(term)
+    if wrapped is None:
+        return _literal_spans(text, term)
+    opener, closer, inner = wrapped
+    spans = _literal_spans(text, term)
+    if inner:
+        spans.extend(_literal_spans(text, inner))
+    words = _words(inner)
+    if not words:
+        return spans
+    group = re.compile(
+        re.escape(opener) + r"[^" + re.escape(opener + closer) + r"]*" + re.escape(closer)
+    )
+    for match in group.finditer(text):
+        if _contains_words(match.group()[1:-1], words):
+            spans.append(match.span())
+    return spans
+
+
+def _merge_spans(spans: list[tuple[int, int]]) -> list[tuple[int, int]]:
+    ordered = sorted((start, end) for start, end in spans if start < end)
+    if not ordered:
+        return []
+    merged = [ordered[0]]
+    for start, end in ordered[1:]:
+        prev_start, prev_end = merged[-1]
+        if start <= prev_end:
+            merged[-1] = (prev_start, max(prev_end, end))
+        else:
+            merged.append((start, end))
+    return merged
 
 
 def strip_term(name: str, term: str) -> str:
     """Remove a term, symbol, or wildcard pattern from a title.
 
-    A quote character clears every kind of quote. * is a wildcard:
-    `ft. *` drops that and everything after it, ` [*]` drops a bracket tag.
+    A quote character clears every kind of quote. Spacing, dashes, and quote
+    marks do not have to match exactly. A bracketed term such as
+    `(Official Video)` removes any same-style tag that contains those words,
+    so `(Official Music Video)` goes too. * is a wildcard: `ft. *` drops that
+    and everything after it, `[*]` drops a bracket tag, `(*)` drops a
+    parenthetical.
     """
+    source = name or ""
     needle = (term or "").strip()
-    if not needle:
-        return name or ""
+    if not needle or not source:
+        return source
     if "*" not in needle and all(ch in _QUOTES for ch in needle):
-        cleaned = "".join(ch for ch in (name or "") if ch not in _QUOTES)
-    elif "*" in needle:
-        cleaned = _wildcard_pattern(needle).sub("", name or "")
-    else:
-        cleaned = re.sub(re.escape(needle), "", name or "", flags=re.IGNORECASE)
+        cleaned = "".join(ch for ch in source if ch not in _QUOTES)
+        return source if cleaned == source else tidy_title(cleaned)
+
+    canon, starts = _canon_map(source)
+    canon_term, _term_starts = _canon_map(needle)
+    if not canon or not canon_term:
+        return source
+    spans = [
+        (starts[start], starts[end])
+        for start, end in _merge_spans(_match_spans(canon, canon_term))
+    ]
+    if not spans:
+        return source
+    cleaned = source
+    for start, end in reversed(spans):
+        cleaned = cleaned[:start] + cleaned[end:]
     return tidy_title(cleaned)
 
 
@@ -333,6 +483,10 @@ def _cookie_args() -> list[str]:
 
 
 def _ytdlp_command() -> list[str]:
+    if getattr(sys, "frozen", False):
+        bundled = Path(sys.executable).with_name("yt-dlp.exe")
+        if bundled.is_file():
+            return [str(bundled)]
     binary = shutil.which("yt-dlp")
     if binary:
         return [binary]
@@ -384,14 +538,22 @@ def _extract_json(url: str, *, playlist: bool) -> dict:
 def probe_url(url: str, *, playlist: bool = False) -> Probe:
     """Fetch metadata (and pick formats) without downloading."""
     try:
-        info = _extract_json(url, playlist=playlist)
+        # Let yt-dlp expose playlist entries so the queue can turn them into
+        # individual tickets with their own title and type controls.
+        info = _extract_json(url, playlist=True)
         if not info:
             return Probe(url=url, error="No media found")
 
         count = 0
+        playlist_urls: list[str] = []
         if info.get("_type") == "playlist":
             entries = [e for e in (info.get("entries") or []) if e]
             count = len(entries)
+            playlist_urls = [
+                str(e.get("webpage_url") or e.get("original_url") or "")
+                for e in entries
+                if e.get("webpage_url") or e.get("original_url")
+            ]
             if not entries:
                 return Probe(url=url, error="Empty playlist")
             info = entries[0]
@@ -423,6 +585,7 @@ def probe_url(url: str, *, playlist: bool = False) -> Probe:
             webpage_url=str(info.get("webpage_url") or url),
             is_live=bool(info.get("is_live")),
             playlist_count=count,
+            playlist_urls=playlist_urls,
             description=str(info.get("description") or ""),
             genre=str(info.get("genre") or ""),
             tags=[str(t) for t in (info.get("tags") or [])][:40],
