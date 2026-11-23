@@ -34,26 +34,27 @@ jobs:
         run: python -m pip install --upgrade yt-dlp
       - name: Build Windows app
         run: |
-          runtime_bin="$(cygpath -m /ucrt64/bin)"
-          python -m PyInstaller --noconfirm --clean --windowed --onedir \
+          runtime_prefix="$(cygpath -m /ucrt64)"
+          runtime_bin="$runtime_prefix/bin"
+          glib-compile-schemas /ucrt64/share/glib-2.0/schemas
+          python -m PyInstaller --noconfirm --clean --onefile --console \
+            --name yt-dlp --collect-all yt_dlp tools/yt_dlp_entry.py
+          python -m PyInstaller --noconfirm --clean --onefile --windowed \
             --name MediaDL --collect-all gi --collect-all cairo \
             --collect-all yt_dlp --hidden-import gi.repository.Gtk \
             --hidden-import gi.repository.Adw \
+            --add-binary "dist/yt-dlp.exe;." \
             --add-binary "$runtime_bin/libgtk-4-1.dll;." \
             --add-binary "$runtime_bin/libadwaita-1-0.dll;." \
             --add-binary "$runtime_bin/ffmpeg.exe;." \
-            --add-binary "$runtime_bin/ffprobe.exe;." media_dl/__main__.py
-          python -m PyInstaller --noconfirm --clean --onefile --console \
-            --name yt-dlp --collect-all yt_dlp tools/yt_dlp_entry.py
-          cp dist/yt-dlp.exe dist/MediaDL/yt-dlp.exe
-          mkdir -p dist/MediaDL/lib/girepository-1.0 dist/MediaDL/share/glib-2.0/schemas dist/MediaDL/share/icons
-          cp -r /ucrt64/lib/girepository-1.0/. dist/MediaDL/lib/girepository-1.0/
-          cp -r /ucrt64/share/glib-2.0/schemas/. dist/MediaDL/share/glib-2.0/schemas/
-          glib-compile-schemas dist/MediaDL/share/glib-2.0/schemas
-          cp -r /ucrt64/share/icons/Adwaita dist/MediaDL/share/icons/
+            --add-binary "$runtime_bin/ffprobe.exe;." \
+            --add-data "$runtime_prefix/lib/girepository-1.0;lib/girepository-1.0" \
+            --add-data "$runtime_prefix/share/glib-2.0/schemas;share/glib-2.0/schemas" \
+            --add-data "$runtime_prefix/share/icons/Adwaita;share/icons/Adwaita" \
+            media_dl/__main__.py
       - name: Archive portable app
         shell: pwsh
-        run: Compress-Archive -Path dist/MediaDL -DestinationPath dist/MediaDL-windows-x64.zip
+        run: Compress-Archive -Path dist/MediaDL.exe -DestinationPath dist/MediaDL-windows-x64.zip
       - uses: actions/upload-artifact@v4
         with:
           name: MediaDL-windows-x64

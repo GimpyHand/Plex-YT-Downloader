@@ -490,9 +490,11 @@ def _cookie_args() -> list[str]:
 
 def _ytdlp_command() -> list[str]:
     if getattr(sys, "frozen", False):
-        bundled = Path(sys.executable).with_name("yt-dlp.exe")
-        if bundled.is_file():
-            return [str(bundled)]
+        bundle_dir = Path(getattr(sys, "_MEIPASS", Path(sys.executable).parent))
+        candidates = (bundle_dir / "yt-dlp.exe", Path(sys.executable).with_name("yt-dlp.exe"))
+        for bundled in candidates:
+            if bundled.is_file():
+                return [str(bundled)]
     binary = shutil.which("yt-dlp")
     if binary:
         return [binary]
